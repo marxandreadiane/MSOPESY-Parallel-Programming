@@ -1,4 +1,4 @@
-"""Parallel OCR pipeline: one loader thread, N workers, one CSV writer."""
+"""Parallel OCR pipeline"""
 
 from __future__ import annotations
 
@@ -25,8 +25,6 @@ class PipelineError(RuntimeError):
 
 @dataclass(frozen=True)
 class PipelineStats:
-    """Summary of one pipeline run."""
-
     images: int
     processed: int
     failed: int
@@ -36,12 +34,10 @@ class PipelineStats:
 
     @property
     def throughput(self) -> float:
-        """Images per second."""
         return self.images / self.elapsed_s if self.elapsed_s else 0.0
 
     @property
     def average_processing_ms(self) -> float:
-        """Mean worker time per image."""
         return self.sum_processing_ms / self.processed if self.processed else 0.0
 
 
@@ -169,7 +165,6 @@ def run_pipeline(
 
 
 def format_stats(stats: PipelineStats) -> str:
-    """Human-readable summary."""
     return (
         f"images:      {stats.images}\n"
         f"processed:   {stats.processed}\n"
