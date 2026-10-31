@@ -1,0 +1,2 @@
+image_dir=data/images
+n_workers=2

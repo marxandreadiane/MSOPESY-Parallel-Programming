@@ -1,0 +1,11 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+
+# Extracted dataset
+data/images/*
+!data/images/.gitkeep
+
+# Per-run benchmark outputs
+benchmarks/ocr_results_w*.csv
