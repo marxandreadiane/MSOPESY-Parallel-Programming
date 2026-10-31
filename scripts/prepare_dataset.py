@@ -1,4 +1,4 @@
-"""Extract the bundled dataset into ``data/images``."""
+"""Extract the dataset into ``data/images``."""
 
 from __future__ import annotations
 
