@@ -8,7 +8,7 @@ from unittest.mock import patch
 import pytesseract
 from PIL import Image
 
-from ocr_pipeline.ocr import OcrError, check_tesseract, extract_text
+from ocr_pipeline.ocr import OcrError, check_tesseract, extract_text, find_tesseract
 
 
 class OcrTests(unittest.TestCase):
@@ -76,6 +76,53 @@ class OcrTests(unittest.TestCase):
         ):
             with self.assertRaisesRegex(OcrError, "Tesseract is not available"):
                 check_tesseract()
+
+    def test_find_tesseract_returns_none_when_on_path(self) -> None:
+        with patch(
+            "ocr_pipeline.ocr.shutil.which",
+            return_value=r"C:\fake\tesseract.exe",
+        ):
+            self.assertIsNone(find_tesseract())
+
+    def test_find_tesseract_uses_known_location(self) -> None:
+        with tempfile.TemporaryDirectory() as folder:
+            candidate = Path(folder) / "tesseract.exe"
+            candidate.write_bytes(b"")
+
+            with patch("ocr_pipeline.ocr.shutil.which", return_value=None), patch(
+                "ocr_pipeline.ocr.TESSERACT_CANDIDATES", (candidate,)
+            ):
+                self.assertEqual(find_tesseract(), str(candidate))
+
+    def test_check_tesseract_uses_known_location(self) -> None:
+        with tempfile.TemporaryDirectory() as folder:
+            candidate = Path(folder) / "tesseract.exe"
+            candidate.write_bytes(b"")
+
+            with patch("ocr_pipeline.ocr.shutil.which", return_value=None), patch(
+                "ocr_pipeline.ocr.TESSERACT_CANDIDATES", (candidate,)
+            ), patch(
+                "ocr_pipeline.ocr.pytesseract.get_tesseract_version",
+                return_value="5.4.0",
+            ):
+                self.assertEqual(check_tesseract(), "5.4.0")
+
+            self.assertEqual(pytesseract.pytesseract.tesseract_cmd, str(candidate))
+
+    def test_extract_text_uses_known_location(self) -> None:
+        with tempfile.TemporaryDirectory() as folder:
+            candidate = Path(folder) / "tesseract.exe"
+            candidate.write_bytes(b"")
+
+            with patch("ocr_pipeline.ocr.shutil.which", return_value=None), patch(
+                "ocr_pipeline.ocr.TESSERACT_CANDIDATES", (candidate,)
+            ), patch(
+                "ocr_pipeline.ocr.pytesseract.image_to_string",
+                return_value="text",
+            ):
+                self.assertEqual(extract_text(self.image), "text")
+
+            self.assertEqual(pytesseract.pytesseract.tesseract_cmd, str(candidate))
 
 
 if __name__ == "__main__":
