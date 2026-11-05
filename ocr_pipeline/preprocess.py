@@ -2,13 +2,13 @@
 
 from pathlib import Path
 
-from PIL import Image, ImageFilter, ImageOps
+from PIL import Image, ImageChops, ImageFilter, ImageOps
 
 MIN_SHORT_SIDE = 300
 MAX_UPSCALE = 4
 BORDER = 20
 THRESHOLD = 128
-
+DARK_CUTOFF = 128 
 
 def load_image(path: str | Path) -> Image.Image:
     """Open an image as grayscale."""
@@ -17,7 +17,7 @@ def load_image(path: str | Path) -> Image.Image:
 
 
 def preprocess_image(image: Image.Image) -> Image.Image:
-    """Grayscale, upscale small images, denoise, binarize, add a white border."""
+    """Grayscale, upscale small images, denoise, binarize, crop to text, sharpen, add a white border."""
     image = ImageOps.autocontrast(image.convert("L"))
 
     width, height = image.size
@@ -30,6 +30,19 @@ def preprocess_image(image: Image.Image) -> Image.Image:
         )
 
     image = image.filter(ImageFilter.MedianFilter(3))
+    image = image.filter(ImageFilter.SHARPEN)
     image = image.point(lambda pixel: 255 if pixel >= THRESHOLD else 0)
+
+    mask = image.point(lambda p: 255 if p < DARK_CUTOFF else 0)
+    bbox = mask.getbbox()
+    if bbox:
+        pad = 10
+        left, top, right, bottom = bbox
+        image = image.crop((
+            max(0, left - pad),
+            max(0, top - pad),
+            min(image.width, right + pad),
+            min(image.height, bottom + pad),
+        ))
 
     return ImageOps.expand(image, border=BORDER, fill=255)

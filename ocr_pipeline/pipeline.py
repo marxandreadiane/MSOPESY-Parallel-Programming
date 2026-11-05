@@ -6,9 +6,12 @@ import queue
 import sys
 import threading
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
+import csv
+import re
+
 
 from .config import Config
 from .ocr import check_tesseract, extract_text
@@ -31,6 +34,8 @@ class PipelineStats:
     elapsed_s: float
     sum_processing_ms: float
     output_csv: Path
+    matched: list[str] = field(default_factory=list)      # filenames that matched
+    mismatched: list[str] = field(default_factory=list)
 
     @property
     def throughput(self) -> float:
@@ -39,7 +44,6 @@ class PipelineStats:
     @property
     def average_processing_ms(self) -> float:
         return self.sum_processing_ms / self.processed if self.processed else 0.0
-
 
 def list_images(directory: str | Path) -> list[Path]:
     """Return supported images sorted by filename."""
@@ -52,6 +56,10 @@ def list_images(directory: str | Path) -> list[Path]:
         ),
         key=lambda path: path.name.lower(),
     )
+
+def clean_text(text):
+    """Remove symbols at the start and end of the text."""
+    return re.sub(r"^[^A-Za-z0-9]+|[^A-Za-z0-9]+$", "", text)
 
 
 def run_pipeline(
@@ -85,6 +93,7 @@ def run_pipeline(
     work_queue: queue.Queue[Path | None] = queue.Queue(maxsize=max(2, n_workers * 2))
     result_queue: queue.Queue[Result] = queue.Queue()
 
+    ## 3 kinds of threads created
     def loader() -> None:
         for path in images:
             work_queue.put(path)
@@ -101,7 +110,7 @@ def run_pipeline(
             try:
                 image = load_image(path)
                 prepared = preprocess_image(image)
-                text = ocr_fn(prepared)
+                text = clean_text(ocr_fn(prepared))
                 elapsed_ms = (time.perf_counter() - started) * 1000.0
                 result_queue.put(Result(path.name, text, elapsed_ms))
             except Exception as exc:
@@ -132,10 +141,10 @@ def run_pipeline(
         thread.start()
 
     try:
-        with ResultWriter(destination) as writer:
+        with ResultWriter(destination) as writer: #this is the main thread
             while processed < total:
-                result = result_queue.get()
-                writer.write(result)
+                result = result_queue.get() # wait for a finished result
+                writer.write(result) #write one CSV row
                 processed += 1
                 sum_processing_ms += result.processing_ms
 
@@ -163,14 +172,55 @@ def run_pipeline(
         output_csv=destination,
     )
 
+def _norm(s: str) -> str:
+    return "".join((s or "").split()).casefold()
+
+
+def compute_matches(csv_path) -> tuple[list[str], list[str]]:
+    matched, mismatched = [], []
+
+    with open(csv_path, newline="", encoding="utf-8-sig") as f:
+        reader = csv.DictReader(f)
+
+        # Check available CSV columns
+        print("CSV columns:", reader.fieldnames)
+
+        for row in reader:
+            filename = row.get("filename", "")
+            text = row.get("text", "")
+
+            # Use label if available; otherwise use filename
+            label = row.get("label")
+
+            if not label:
+                label = Path(filename).stem
+
+            line = f'{filename}: label={label!r} -> ocr={text!r}'
+
+            if _norm(label) == _norm(text):
+                matched.append(line)
+            else:
+                mismatched.append(line)
+
+    return matched, mismatched
 
 def format_stats(stats: PipelineStats) -> str:
-    return (
+    matched, mismatched = compute_matches(stats.output_csv)
+    total = len(matched) + len(mismatched)
+    accuracy = (len(matched) / total * 100) if total else 0.0
+
+    out = (
         f"images:      {stats.images}\n"
         f"processed:   {stats.processed}\n"
         f"failed:      {stats.failed}\n"
         f"wall time:   {stats.elapsed_s:.3f} s\n"
         f"throughput:  {stats.throughput:.2f} images/s\n"
         f"avg worker:  {stats.average_processing_ms:.1f} ms/image\n"
-        f"output:      {stats.output_csv}"
+        f"output:      {stats.output_csv}\n"
+        f"matched:     {len(matched)}/{total} ({accuracy:.1f}%)\n"
     )
+    if matched:
+        out += "\nMATCHED:\n  " + "\n  ".join(matched) + "\n"
+    if mismatched:
+        out += "\nMISMATCHED:\n  " + "\n  ".join(mismatched) + "\n"
+    return out
