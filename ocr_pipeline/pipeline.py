@@ -1,31 +1,28 @@
-"""Parallel OCR pipeline"""
+"""Parallel OCR pipeline (multiprocessing version)"""
 
 from __future__ import annotations
-
+ 
+import difflib
+import multiprocessing as mp
 import queue
-import sys
-import threading
-import time
-from dataclasses import dataclass, field
-from pathlib import Path
-from typing import Callable
-import csv
 import re
-
-
+import sys
+import time
+from dataclasses import dataclass
+from pathlib import Path
+ 
 from .config import Config
 from .ocr import check_tesseract, extract_text
 from .preprocess import load_image, preprocess_image
 from .results import Result, ResultWriter
-
+ 
 IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff", ".webp"}
-OcrFn = Callable[[object], str]
-
-
+ 
+ 
 class PipelineError(RuntimeError):
     """Raised when the pipeline cannot start."""
-
-
+ 
+ 
 @dataclass(frozen=True)
 class PipelineStats:
     images: int
@@ -34,17 +31,15 @@ class PipelineStats:
     elapsed_s: float
     sum_processing_ms: float
     output_csv: Path
-    matched: list[str] = field(default_factory=list)      # filenames that matched
-    mismatched: list[str] = field(default_factory=list)
-
+  
     @property
     def throughput(self) -> float:
         return self.images / self.elapsed_s if self.elapsed_s else 0.0
-
+ 
     @property
     def average_processing_ms(self) -> float:
         return self.sum_processing_ms / self.processed if self.processed else 0.0
-
+ 
 def list_images(directory: str | Path) -> list[Path]:
     """Return supported images sorted by filename."""
     folder = Path(directory)
@@ -56,16 +51,49 @@ def list_images(directory: str | Path) -> list[Path]:
         ),
         key=lambda path: path.name.lower(),
     )
-
-def clean_text(text):
+ 
+ 
+def clean_text(text: str) -> str:
     """Remove symbols at the start and end of the text."""
     return re.sub(r"^[^A-Za-z0-9]+|[^A-Za-z0-9]+$", "", text)
-
-
+  
+def loader_process(images: list[Path], work_queue, n_workers: int) -> None:
+    """Put every image path on the work queue, then one stop signal (None) per worker."""
+    try:
+        for path in images:
+            work_queue.put(path)           
+    finally:
+        for _ in range(n_workers):
+            work_queue.put(None)
+ 
+ 
+def worker_process(work_queue, result_queue) -> None:
+    """Take paths from the work queue, preprocess + OCR each, send Results back."""
+    try:
+        check_tesseract()   
+        while True:
+            path = work_queue.get()       
+            if path is None:              
+                break
+ 
+            started = time.perf_counter()
+            try:
+                image = load_image(path)
+                prepared = preprocess_image(image)
+                text = clean_text(extract_text(prepared))
+                error = None
+            except Exception as exc:       
+                text = ""
+                error = f"{type(exc).__name__}: {exc}"
+            elapsed_ms = (time.perf_counter() - started) * 1000.0
+            result_queue.put(Result(path.name, text, elapsed_ms, error=error))
+    finally:
+        result_queue.put(None)             
+ 
+ 
 def run_pipeline(
     config: Config,
     *,
-    ocr_fn: OcrFn | None = None,
     output_path: str | Path | None = None,
     limit: int | None = None,
     progress: bool = True,
@@ -78,90 +106,72 @@ def run_pipeline(
         images = images[:limit]
     if not images:
         raise PipelineError(f"No supported images found in {config.image_dir}")
-
+ 
     destination = (
         Path(output_path).resolve()
         if output_path
         else (Path.cwd() / "outputs" / "ocr_results.csv")
     )
-
-    if ocr_fn is None:
-        check_tesseract()
-        ocr_fn = extract_text
-
+ 
+    check_tesseract() 
+ 
     n_workers = config.n_workers
-    work_queue: queue.Queue[Path | None] = queue.Queue(maxsize=max(2, n_workers * 2))
-    result_queue: queue.Queue[Result] = queue.Queue()
-
-    ## 3 kinds of threads created
-    def loader() -> None:
-        for path in images:
-            work_queue.put(path)
-        for _ in range(n_workers):
-            work_queue.put(None)
-
-    def worker() -> None:
-        while True:
-            path = work_queue.get()
-            if path is None:
-                return
-
-            started = time.perf_counter()
-            try:
-                image = load_image(path)
-                prepared = preprocess_image(image)
-                text = clean_text(ocr_fn(prepared))
-                elapsed_ms = (time.perf_counter() - started) * 1000.0
-                result_queue.put(Result(path.name, text, elapsed_ms))
-            except Exception as exc:
-                elapsed_ms = (time.perf_counter() - started) * 1000.0
-                result_queue.put(
-                    Result(
-                        path.name,
-                        "",
-                        elapsed_ms,
-                        error=f"{type(exc).__name__}: {exc}",
-                    )
-                )
-
-    started_at = time.perf_counter()
-    loader_thread = threading.Thread(target=loader, name="loader")
+    work_queue = mp.Queue(maxsize=max(2, n_workers * 2))
+    result_queue = mp.Queue()
+ 
+    loader = mp.Process(
+        target=loader_process, args=(images, work_queue, n_workers), name="loader"
+    )
     workers = [
-        threading.Thread(target=worker, name=f"ocr-{index}")
-        for index in range(1, n_workers + 1)
+        mp.Process(target=worker_process, args=(work_queue, result_queue), name=f"ocr-{i}")
+        for i in range(1, n_workers + 1)
     ]
-
+    processes = [loader, *workers]
+ 
     processed = 0
     failed = 0
+    exact_matches = 0
+    char_similarity_sum = 0.0
     sum_processing_ms = 0.0
     total = len(images)
-
-    loader_thread.start()
-    for thread in workers:
-        thread.start()
-
+    workers_finished = 0
+ 
+    # The clock starts before the processes launch, so startup cost is included.
+    started_at = time.perf_counter()
+    for process in processes:
+        process.start()
+ 
     try:
-        with ResultWriter(destination) as writer: #this is the main thread
-            while processed < total:
-                result = result_queue.get() # wait for a finished result
-                writer.write(result) #write one CSV row
+        with ResultWriter(destination) as writer:  
+            while workers_finished < n_workers:
+                try:
+                    result = result_queue.get(timeout=1)
+                except queue.Empty:
+                    if not any(worker.is_alive() for worker in workers):
+                        break
+                    continue
+ 
+                if result is None:                  
+                    workers_finished += 1
+                    continue
+ 
+                writer.write(result)
                 processed += 1
                 sum_processing_ms += result.processing_ms
-
+ 
                 if result.error is not None:
                     failed += 1
-                    print(
-                        f"[warn] {result.filename}: {result.error}",
-                        file=sys.stderr,
-                    )
-
+                    print(f"[warn] {result.filename}: {result.error}", file=sys.stderr)
+ 
                 if progress and (processed % 10 == 0 or processed == total):
                     print(f"[{processed}/{total}] images written")
     finally:
-        for thread in workers:
-            thread.join()
-        loader_thread.join()
-
+        for process in processes:
+            process.join(timeout=10)
+            if process.is_alive():
+                process.terminate()
+                process.join()
+ 
     elapsed_s = time.perf_counter() - started_at
     return PipelineStats(
         images=total,
@@ -171,45 +181,10 @@ def run_pipeline(
         sum_processing_ms=sum_processing_ms,
         output_csv=destination,
     )
-
-def _norm(s: str) -> str:
-    return "".join((s or "").split()).casefold()
-
-
-def compute_matches(csv_path) -> tuple[list[str], list[str]]:
-    matched, mismatched = [], []
-
-    with open(csv_path, newline="", encoding="utf-8-sig") as f:
-        reader = csv.DictReader(f)
-
-        # Check available CSV columns
-        print("CSV columns:", reader.fieldnames)
-
-        for row in reader:
-            filename = row.get("filename", "")
-            text = row.get("text", "")
-
-            # Use label if available; otherwise use filename
-            label = row.get("label")
-
-            if not label:
-                label = Path(filename).stem
-
-            line = f'{filename}: label={label!r} -> ocr={text!r}'
-
-            if _norm(label) == _norm(text):
-                matched.append(line)
-            else:
-                mismatched.append(line)
-
-    return matched, mismatched
-
+ 
+ 
 def format_stats(stats: PipelineStats) -> str:
-    matched, mismatched = compute_matches(stats.output_csv)
-    total = len(matched) + len(mismatched)
-    accuracy = (len(matched) / total * 100) if total else 0.0
-
-    out = (
+    return (
         f"images:      {stats.images}\n"
         f"processed:   {stats.processed}\n"
         f"failed:      {stats.failed}\n"
@@ -217,10 +192,5 @@ def format_stats(stats: PipelineStats) -> str:
         f"throughput:  {stats.throughput:.2f} images/s\n"
         f"avg worker:  {stats.average_processing_ms:.1f} ms/image\n"
         f"output:      {stats.output_csv}\n"
-        f"matched:     {len(matched)}/{total} ({accuracy:.1f}%)\n"
     )
-    if matched:
-        out += "\nMATCHED:\n  " + "\n  ".join(matched) + "\n"
-    if mismatched:
-        out += "\nMISMATCHED:\n  " + "\n  ".join(mismatched) + "\n"
-    return out
+ 

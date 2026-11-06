@@ -1,5 +1,6 @@
 """Parallel OCR pipeline entry point."""
 
+import multiprocessing as mp
 import sys
 
 from ocr_pipeline.config import load_config
@@ -19,4 +20,5 @@ def main() -> int:
 
 
 if __name__ == "__main__":
+    mp.set_start_method("spawn")
     raise SystemExit(main())
