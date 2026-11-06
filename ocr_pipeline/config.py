@@ -23,4 +23,8 @@ def load_config(path: str | Path = "config.txt") -> Config:
     if not image_dir.is_absolute():
         image_dir = (source.parent / image_dir).resolve()
 
-    return Config(image_dir=image_dir, n_workers=int(values["n_workers"]))
+    n_workers = int(values["n_workers"])
+    if n_workers < 1:
+        raise ValueError("n_workers must be at least 1")
+
+    return Config(image_dir=image_dir, n_workers=n_workers)

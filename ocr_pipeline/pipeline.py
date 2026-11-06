@@ -1,22 +1,21 @@
-"""Parallel OCR pipeline (multiprocessing version)"""
+"""Parallel OCR pipeline"""
 
 from __future__ import annotations
  
-import difflib
 import multiprocessing as mp
 import queue
-import re
 import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
- 
+
 from .config import Config
 from .ocr import check_tesseract, extract_text
+from .postprocess import clean_text
 from .preprocess import load_image, preprocess_image
 from .results import Result, ResultWriter
- 
-IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff", ".webp"}
+
+IMAGE_SUFFIXES = {".png"}
  
  
 class PipelineError(RuntimeError):
@@ -53,10 +52,6 @@ def list_images(directory: str | Path) -> list[Path]:
     )
  
  
-def clean_text(text: str) -> str:
-    """Remove symbols at the start and end of the text."""
-    return re.sub(r"^[^A-Za-z0-9]+|[^A-Za-z0-9]+$", "", text)
-  
 def loader_process(images: list[Path], work_queue, n_workers: int) -> None:
     """Put every image path on the work queue, then one stop signal (None) per worker."""
     try:
@@ -95,15 +90,10 @@ def run_pipeline(
     config: Config,
     *,
     output_path: str | Path | None = None,
-    limit: int | None = None,
     progress: bool = True,
 ) -> PipelineStats:
     """Process every image and write one CSV."""
     images = list_images(config.image_dir)
-    if limit is not None:
-        if limit < 1:
-            raise PipelineError("limit must be at least 1")
-        images = images[:limit]
     if not images:
         raise PipelineError(f"No supported images found in {config.image_dir}")
  
@@ -130,13 +120,11 @@ def run_pipeline(
  
     processed = 0
     failed = 0
-    exact_matches = 0
-    char_similarity_sum = 0.0
     sum_processing_ms = 0.0
     total = len(images)
     workers_finished = 0
  
-    # The clock starts before the processes launch, so startup cost is included.
+    # Clock starts before starting processes to include startup overhead
     started_at = time.perf_counter()
     for process in processes:
         process.start()
@@ -188,7 +176,7 @@ def format_stats(stats: PipelineStats) -> str:
         f"images:      {stats.images}\n"
         f"processed:   {stats.processed}\n"
         f"failed:      {stats.failed}\n"
-        f"wall time:   {stats.elapsed_s:.3f} s\n"
+        f"total time:  {stats.elapsed_s:.3f} s\n"
         f"throughput:  {stats.throughput:.2f} images/s\n"
         f"avg worker:  {stats.average_processing_ms:.1f} ms/image\n"
         f"output:      {stats.output_csv}\n"
