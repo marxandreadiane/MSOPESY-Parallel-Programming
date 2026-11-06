@@ -4,6 +4,7 @@ import multiprocessing as mp
 import sys
 from pathlib import Path
 
+from ocr_pipeline.accuracy import LABELS_NAME, format_accuracy, load_labels, score
 from ocr_pipeline.config import load_config
 from ocr_pipeline.ocr import OcrError
 from ocr_pipeline.pipeline import PipelineError, format_stats, run_pipeline
@@ -29,6 +30,16 @@ def main() -> int:
 
     print("pipeline finished")
     print(format_stats(stats))
+
+    labels_path = config.image_dir / LABELS_NAME
+    if labels_path.is_file():
+        print(format_accuracy(score(stats.output_csv, load_labels(labels_path))))
+    else:
+        print(
+            f"accuracy:    skipped ({LABELS_NAME} not found; "
+            "run scripts/prepare_dataset.py)\n"
+        )
+
     if stats.processed < stats.images:
         print(
             f"error: only {stats.processed} of {stats.images} images were processed "

@@ -11,6 +11,7 @@ from PIL import Image
 
 ROOT = Path(__file__).resolve().parents[1]
 IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff", ".webp"}
+LABELS_NAME = "labels.txt"  # ground truth 
 
 
 def extract_dataset(zip_path: Path, destination: Path) -> int:
@@ -28,10 +29,16 @@ def extract_dataset(zip_path: Path, destination: Path) -> int:
                 continue
 
             name = Path(info.filename).name
-            if name.startswith(".") or Path(name).suffix.lower() not in IMAGE_SUFFIXES:
+            if name.startswith("."):
                 continue
 
             target = destination / name
+            if name == LABELS_NAME:
+                target.write_bytes(archive.read(info))
+                continue
+            if Path(name).suffix.lower() not in IMAGE_SUFFIXES:
+                continue
+
             target.write_bytes(archive.read(info))
 
             with Image.open(target) as image:

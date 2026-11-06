@@ -52,7 +52,7 @@ pip install -r requirements.txt
 python scripts/prepare_dataset.py
 ```
 
-This extracts the images into `data/images`.
+This extracts the images and the ground truth (`labels.txt`) into `data/images`.
 
 ## Configuration
 
@@ -95,6 +95,20 @@ throughput:  14.02 images/s
 avg worker:  137.3 ms/image
 output:      ...\outputs\ocr_results.csv
 ```
+
+## Accuracy
+
+If `labels.txt` is in the image folder, the run ends with two scores (case-insensitive):
+
+```text
+exact match: 85/100 (85.0%)
+char accuracy: 97.5% (21 edits / 838 chars)
+```
+
+- `exact match` — images whose text equals the label.
+- `char accuracy` — `1 - edit distance / label characters`. The project requires at least 50%.
+
+Without `labels.txt` the accuracy step is skipped.
 
 ## Output
 
