@@ -29,6 +29,13 @@ def main() -> int:
 
     print("pipeline finished")
     print(format_stats(stats))
+    if stats.processed < stats.images:
+        print(
+            f"error: only {stats.processed} of {stats.images} images were processed "
+            "(a worker stopped early)",
+            file=sys.stderr,
+        )
+        return 1
     return 0 if stats.failed == 0 else 1
 
 

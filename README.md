@@ -20,12 +20,22 @@ This is a Python OCR pipeline that reads images from the provided dataset, prepr
 
 ## Install Tesseract
 
-Install Tesseract for Windows.
-
-After installing, open a new PowerShell and run the following command to ensure that Tesseract is on your PATH:
+Install Tesseract for Windows:
 
 ```powershell
-tesseract --version
+winget install UB-Mannheim.TesseractOCR
+```
+
+The program finds Tesseract automatically, checking in order:
+
+1. the `TESSERACT_CMD` environment variable (full path to `tesseract.exe`)
+2. your `PATH`
+3. `C:\Program Files\Tesseract-OCR\tesseract.exe`
+
+If you installed it somewhere else, set `TESSERACT_CMD`:
+
+```powershell
+$env:TESSERACT_CMD = "D:\Tools\Tesseract-OCR\tesseract.exe"
 ```
 
 ## Install Python packages
@@ -102,11 +112,17 @@ images → loader process → work queue → N worker processes
        → result queue → parent process → CSV
 ```
 
-- One loader process puts image paths into a shared queue.
+- One loader process loads the images and puts them into a shared queue.
 - N worker processes take one image at a time.
 - Each worker cleans the image and runs Tesseract.
 - The parent process writes the CSV and assigns sequential IDs.
 - Workers stop when they receive a `None` sentinel.
+
+## Tests
+
+```powershell
+python -m unittest discover tests
+```
 
 ## Benchmark
 

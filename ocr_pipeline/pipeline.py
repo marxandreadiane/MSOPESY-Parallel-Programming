@@ -53,37 +53,40 @@ def list_images(directory: str | Path) -> list[Path]:
  
  
 def loader_process(images: list[Path], work_queue, n_workers: int) -> None:
-    """Put every image path on the work queue, then one stop signal (None) per worker."""
+    """Load every image and put (filename, image, error) on the work queue."""
     try:
         for path in images:
-            work_queue.put(path)           
+            try:
+                work_queue.put((path.name, load_image(path), None))
+            except Exception as exc:
+                work_queue.put((path.name, None, f"{type(exc).__name__}: {exc}"))
     finally:
         for _ in range(n_workers):
             work_queue.put(None)
- 
- 
+
+
 def worker_process(work_queue, result_queue) -> None:
-    """Take paths from the work queue, preprocess + OCR each, send Results back."""
+    """Take loaded images from the work queue, preprocess + OCR each, send Results back."""
     try:
-        check_tesseract()   
+        check_tesseract()
         while True:
-            path = work_queue.get()       
-            if path is None:              
+            item = work_queue.get()
+            if item is None:
                 break
- 
+
+            filename, image, error = item
+            text = ""
             started = time.perf_counter()
-            try:
-                image = load_image(path)
-                prepared = preprocess_image(image)
-                text = clean_text(extract_text(prepared))
-                error = None
-            except Exception as exc:       
-                text = ""
-                error = f"{type(exc).__name__}: {exc}"
+            if error is None:
+                try:
+                    prepared = preprocess_image(image)
+                    text = clean_text(extract_text(prepared))
+                except Exception as exc:
+                    error = f"{type(exc).__name__}: {exc}"
             elapsed_ms = (time.perf_counter() - started) * 1000.0
-            result_queue.put(Result(path.name, text, elapsed_ms, error=error))
+            result_queue.put(Result(filename, text, elapsed_ms, error=error))
     finally:
-        result_queue.put(None)             
+        result_queue.put(None)
  
  
 def run_pipeline(
