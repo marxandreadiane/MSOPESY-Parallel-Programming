@@ -1,5 +1,7 @@
 # Parallel OCR Pipeline
 
+**Authors: Aguarin, T. A. & Cabato, M. D.**
+
 This is a Python OCR pipeline that reads images from the provided dataset, preprocesses each image, extracts the text with Tesseract, and writes a CSV file.
 
 ## What it does
