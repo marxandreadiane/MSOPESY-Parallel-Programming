@@ -15,12 +15,27 @@ class Config:
 def load_config(path: str | Path = "config.txt") -> Config:
     source = Path(path).expanduser().resolve()
     values: dict[str, str] = {}
-    for line in source.read_text(encoding="utf-8-sig").splitlines():
+    for number, line in enumerate(
+        source.read_text(encoding="utf-8-sig").splitlines(), start=1
+    ):
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if "=" not in line:
+            raise ValueError(f"{source.name} line {number}: expected key=value")
         key, value = line.split("=", 1)
         values[key.strip()] = value.strip()
+
+    for key in ("image_dir", "n_workers"):
+        if key not in values:
+            raise ValueError(f"{source.name}: missing '{key}'")
 
     image_dir = Path(values["image_dir"]).expanduser()
     if not image_dir.is_absolute():
         image_dir = (source.parent / image_dir).resolve()
 
-    return Config(image_dir=image_dir, n_workers=int(values["n_workers"]))
+    n_workers = int(values["n_workers"])
+    if n_workers < 1:
+        raise ValueError("n_workers must be at least 1")
+
+    return Config(image_dir=image_dir, n_workers=n_workers)

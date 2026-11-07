@@ -57,6 +57,33 @@ class ConfigTests(unittest.TestCase):
             with self.assertRaises(FileNotFoundError):
                 load_config(Path(folder) / "absent.txt")
 
+    def test_skips_blank_lines_and_comments(self) -> None:
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            (root / "config.txt").write_text(
+                "# settings\n\nimage_dir=.\n\nn_workers=4\n", encoding="utf-8"
+            )
+
+            self.assertEqual(load_config(root / "config.txt").n_workers, 4)
+
+    def test_missing_key_raises_value_error(self) -> None:
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            (root / "config.txt").write_text("image_dir=.\n", encoding="utf-8")
+
+            with self.assertRaisesRegex(ValueError, "n_workers"):
+                load_config(root / "config.txt")
+
+    def test_rejects_zero_workers(self) -> None:
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            (root / "config.txt").write_text(
+                "image_dir=.\nn_workers=0\n", encoding="utf-8"
+            )
+
+            with self.assertRaises(ValueError):
+                load_config(root / "config.txt")
+
     def test_returns_config_dataclass(self) -> None:
         self.assertIsInstance(load_config(ROOT / "config.txt"), Config)
 

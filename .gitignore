@@ -8,4 +8,4 @@ data/images/*
 !data/images/.gitkeep
 
 # Per-run benchmark outputs
-benchmarks/ocr_results_w*.csv
+benchmarks/runs/

@@ -1,22 +1,55 @@
 """Parallel OCR pipeline entry point."""
 
-from __future__ import annotations
+import multiprocessing as mp
+import sys
+from pathlib import Path
 
-import argparse
-
+from ocr_pipeline.accuracy import LABELS_NAME, format_accuracy, load_labels, score
 from ocr_pipeline.config import load_config
+from ocr_pipeline.ocr import OcrError
+from ocr_pipeline.pipeline import PipelineError, format_stats, run_pipeline
 
 
-def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Parallel OCR pipeline")
-    parser.add_argument("--config", default="config.txt")
-    args = parser.parse_args(argv)
+def main() -> int:
+    print("=== Parallel OCR Pipeline ===")
 
-    config = load_config(args.config)
-    print(f"image_dir: {config.image_dir}")
-    print(f"n_workers: {config.n_workers}")
-    return 0
+    try:
+        config = load_config("config.txt")
+        print("config:    config.txt")
+        print(f"images:    {config.image_dir}")
+        print(f"workers:   {config.n_workers}")
+        print(f"output:    {Path.cwd() / 'outputs' / 'ocr_results.csv'}")
+        print()
+        print("pipeline started")
+
+        stats = run_pipeline(config)
+    except (PipelineError, OcrError, FileNotFoundError, ValueError) as exc:
+        print("pipeline failed", file=sys.stderr)
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+
+    print("pipeline finished")
+    print(format_stats(stats))
+
+    labels_path = config.image_dir / LABELS_NAME
+    if labels_path.is_file():
+        print(format_accuracy(score(stats.output_csv, load_labels(labels_path))))
+    else:
+        print(
+            f"accuracy:    skipped ({LABELS_NAME} not found; "
+            "run scripts/prepare_dataset.py)\n"
+        )
+
+    if stats.processed < stats.images:
+        print(
+            f"error: only {stats.processed} of {stats.images} images were processed "
+            "(a worker stopped early)",
+            file=sys.stderr,
+        )
+        return 1
+    return 0 if stats.failed == 0 else 1
 
 
 if __name__ == "__main__":
+    mp.set_start_method("spawn")
     raise SystemExit(main())
